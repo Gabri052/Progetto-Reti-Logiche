@@ -1,0 +1,181 @@
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use ieee.numeric_std.ALL;
+use ieee.std_logic_unsigned.all;
+
+
+entity project_reti_logiche is
+    Port ( i_clk : in STD_LOGIC;
+           i_start : in STD_LOGIC;
+           i_rst : in STD_LOGIC;
+           i_data : in STD_LOGIC_VECTOR (7 downto 0);
+           o_address : out STD_LOGIC_VECTOR (15 downto 0);
+           o_done : out STD_LOGIC;
+           o_en : out STD_LOGIC;
+           o_we : out STD_LOGIC;
+           o_data : out STD_LOGIC_VECTOR (7 downto 0));
+end project_reti_logiche;
+
+architecture Behavioral of project_reti_logiche is
+--stati fsm
+    type state_type is (reset, coordinata_x_bella, coordinata_y_bella, lettura_mask, lettura_bit, coordinata_x, coordinata_y, calcolo_dist_xy, calcolo_dist, confronto, salva_mask, fine, aspetta);
+    signal stato_vecchio, stato_corrente, stato_prossimo : state_type;
+
+    signal mask_in, mask_out : STD_LOGIC_VECTOR (7 downto 0);
+    signal cnt_mask : integer;
+    signal flag_bit, flag_wr : STD_LOGIC;
+    signal x, x_bella, y, y_bella : STD_LOGIC_VECTOR (7 downto 0);
+    signal distanza, dist_temp : STD_LOGIC_VECTOR (9 downto 0);
+    signal dist_y, dist_x : integer;
+
+begin
+    Main: process(i_clk,i_rst)
+        begin
+        if (i_rst='1') then
+            stato_prossimo <= reset;
+            stato_corrente <= reset;
+            stato_vecchio <= reset;
+        else
+
+            if (i_clk'event and i_clk='1') then
+               stato_vecchio <= stato_corrente;
+               stato_corrente <= stato_prossimo;
+            end if;
+
+            if (i_clk'event and i_clk='0') then
+                case stato_corrente is
+                    when reset =>
+                        o_we <= '0';
+                        o_done <= '0';
+                        o_en <= '1';
+                        flag_bit <= '0';
+                        flag_wr <= '0';
+                        cnt_mask <= 0;
+                        mask_out <= "00000000";
+                        mask_in <= "00000000";
+                        o_address<= "0000000000010001";
+                        distanza <= "1111111111";
+                        if (i_start = '1' and i_rst = '0') then
+                            stato_prossimo <= aspetta;
+                        else stato_prossimo <= reset;
+                        end if;
+
+                    when coordinata_x_bella =>
+                        x_bella <= i_data;
+                        o_address <= "0000000000010010";
+                        stato_prossimo <= aspetta;
+
+                    when coordinata_y_bella =>
+                        y_bella <= i_data;
+                        o_address <= "0000000000000000";
+                        stato_prossimo <= aspetta;
+
+                    when lettura_mask =>
+                        mask_in <= i_data;
+                        stato_prossimo <= aspetta;
+
+                    when lettura_bit =>
+                        if(mask_in(cnt_mask)='0') then
+                            flag_bit <= '0';
+                        else flag_bit <= '1';
+                            o_address <= std_logic_vector(to_unsigned(2*cnt_mask+1, 16));
+                        end if;
+                        stato_prossimo <= aspetta;
+
+                    when coordinata_x =>
+                        x <= i_data;
+                        o_address <= std_logic_vector(to_unsigned(2*cnt_mask+2, 16));
+                        stato_prossimo <= aspetta;
+
+                    when coordinata_y =>
+                        y <= i_data;
+                        flag_bit <= '0';
+                        stato_prossimo <= aspetta;
+
+                    when calcolo_dist_xy =>
+                        if(x>=x_bella ) then
+                            dist_x <= to_integer(unsigned(x-x_bella));
+                        else dist_x <= to_integer(unsigned(x_bella-x));
+                        end if;
+                        if(y>=y_bella ) then
+                            dist_y <= to_integer(unsigned(y-y_bella));
+                        else dist_y <= to_integer(unsigned(y_bella-y));
+                        end if;
+                        stato_prossimo <= aspetta;
+
+                    when calcolo_dist =>
+                        dist_temp <= std_logic_vector(to_unsigned((dist_x+dist_y), 10));
+                        stato_prossimo <= aspetta;
+
+                    when confronto =>
+                        if(distanza>dist_temp) then
+                            mask_out <= (7 downto 0 => '0');
+                            distanza <= dist_temp;
+                            flag_wr <= '1';
+                            elsif(distanza=dist_temp) then
+                            flag_wr <= '1';
+                        else flag_wr <= '0';
+                        end if;
+                        stato_prossimo <= aspetta;
+
+                    when salva_mask =>
+                        if (flag_wr='1' and cnt_mask<=7) then
+                            mask_out(cnt_mask) <= '1';
+                            cnt_mask <= cnt_mask+1;
+                        elsif (flag_wr='0' and cnt_mask<=7) then
+                            mask_out(cnt_mask) <= '0';
+                            cnt_mask <= cnt_mask+1;
+                        end if;
+                        if(cnt_mask=7) then
+                            o_address <= "0000000000010011";
+                            o_we <= '1';
+                            cnt_mask <= cnt_mask+1;
+                        end if;
+                        flag_wr <= '0';
+                        stato_prossimo <= aspetta;
+
+                    when fine =>
+                        o_data <= mask_out;
+                        stato_prossimo <= aspetta;
+                        o_done <= '1';
+
+                    when aspetta =>
+                            case stato_vecchio is
+                                when reset =>
+                                        stato_prossimo <= coordinata_x_bella;
+                                when coordinata_x_bella =>
+                                    stato_prossimo <= coordinata_y_bella;
+                                when coordinata_y_bella =>
+                                    stato_prossimo <= lettura_mask;
+                                when lettura_mask =>
+                                    stato_prossimo <= lettura_bit;
+                                when lettura_bit =>
+                                    if (flag_bit='1') then
+                                        stato_prossimo <= coordinata_x;
+                                    else stato_prossimo <= salva_mask;
+                                    end if;
+                                when coordinata_x =>
+                                    stato_prossimo <= coordinata_y;
+                                when coordinata_y =>
+                                    stato_prossimo <= calcolo_dist_xy;
+                                when calcolo_dist_xy =>
+                                    stato_prossimo <= calcolo_dist;
+                                when calcolo_dist =>
+                                    stato_prossimo <= confronto;
+                                when confronto =>
+                                    stato_prossimo <= salva_mask;
+                                when salva_mask =>
+                                    if (cnt_mask=8) then
+                                        stato_prossimo <= fine;
+                                    else stato_prossimo <= lettura_bit;
+                                    end if;
+                                when fine =>
+                                    stato_prossimo <= reset;
+                                when others =>
+                            end case;
+                    end case;
+                end if;
+            end if;
+    end process;
+end Behavioral;
+
